@@ -1,16 +1,15 @@
 import os
-import shutil
 import logging
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-
 from app.core.database import supabase_admin
 
 logger = logging.getLogger(__name__)
 
-CHROMA_BASE_DIR = "/tmp/provify_chroma"
+# In-memory store: session_id → Chroma vectorstore
+_session_stores: dict[str, Chroma] = {}
 
 _embedding_model = None
 
@@ -28,7 +27,6 @@ def get_embeddings():
 
 
 def list_all_files(prefix: str) -> list[str]:
-    """Recursively list every file path under a storage prefix"""
     all_paths = []
     entries = supabase_admin.storage.from_("provify-code").list(prefix)
     for entry in entries:
@@ -42,7 +40,6 @@ def list_all_files(prefix: str) -> list[str]:
 
 
 def fetch_session_files(session_id: str) -> dict[str, str]:
-    """Download all extracted code files for a session from Supabase Storage"""
     paths = list_all_files(session_id)
     contents = {}
     for path in paths:
@@ -50,7 +47,6 @@ def fetch_session_files(session_id: str) -> dict[str, str]:
         try:
             relative_name = path[len(session_id) + 1:]
             text = raw.decode("utf-8")
-            # ✅ skip empty or whitespace-only files
             if text.strip():
                 contents[relative_name] = text
         except UnicodeDecodeError:
@@ -60,7 +56,6 @@ def fetch_session_files(session_id: str) -> dict[str, str]:
 
 
 def chunk_files(files: dict[str, str]) -> list[Document]:
-    """Split code files into chunks, tagging each chunk with its source file"""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=150,
@@ -70,7 +65,6 @@ def chunk_files(files: dict[str, str]) -> list[Document]:
     for filename, content in files.items():
         chunks = splitter.split_text(content)
         for i, chunk in enumerate(chunks):
-            # ✅ skip empty or whitespace-only chunks
             if chunk.strip():
                 documents.append(Document(
                     page_content=chunk,
@@ -82,8 +76,8 @@ def chunk_files(files: dict[str, str]) -> list[Document]:
 
 def ingest_session(session_id: str) -> int:
     """
-    Per-session RAG pipeline:
-    fetch code -> chunk -> embed via HF API -> store in a fresh Chroma collection
+    Build an IN-MEMORY Chroma vectorstore for this session.
+    No /tmp persistence — survives only for the life of this process.
     """
     files = fetch_session_files(session_id)
     if not files:
@@ -93,33 +87,31 @@ def ingest_session(session_id: str) -> int:
     if not documents:
         raise ValueError(f"No valid chunks produced for session {session_id}")
 
-    persist_dir = f"{CHROMA_BASE_DIR}/{session_id}"
-    os.makedirs(persist_dir, exist_ok=True)
-
-    Chroma.from_documents(
+    # ✅ No persist_directory — pure in-memory
+    vectorstore = Chroma.from_documents(
         documents=documents,
         embedding=get_embeddings(),
         collection_name=session_id,
-        persist_directory=persist_dir
     )
 
-    logger.info(f"✅ Ingested {len(documents)} chunks for session {session_id}")
+    _session_stores[session_id] = vectorstore
+    logger.info(f"✅ Ingested {len(documents)} chunks for session {session_id} (in-memory)")
     return len(documents)
 
 
 def get_session_vectorstore(session_id: str) -> Chroma:
-    """Load an existing per-session Chroma collection"""
-    persist_dir = f"{CHROMA_BASE_DIR}/{session_id}"
-    return Chroma(
-        collection_name=session_id,
-        embedding_function=get_embeddings(),
-        persist_directory=persist_dir
-    )
+    """Return the in-memory vectorstore for this session."""
+    store = _session_stores.get(session_id)
+    if not store:
+        raise ValueError(
+            f"No vectorstore found for session {session_id}. "
+            f"Was ingest called? Active sessions: {list(_session_stores.keys())}"
+        )
+    return store
 
 
 def delete_session_vectorstore(session_id: str):
-    """Delete the per-session ChromaDB collection after the interview completes"""
-    persist_dir = f"{CHROMA_BASE_DIR}/{session_id}"
-    if os.path.exists(persist_dir):
-        shutil.rmtree(persist_dir)
-        logger.info(f"🗑️ Deleted vectorstore for session {session_id}")
+    """Remove the in-memory vectorstore after interview completes."""
+    if session_id in _session_stores:
+        del _session_stores[session_id]
+        logger.info(f"🗑️ Deleted in-memory vectorstore for session {session_id}")
