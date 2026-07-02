@@ -36,16 +36,28 @@ def _get_redis():
     global _redis_client
     if _redis_client is None:
         try:
+            redis_url = (settings.REDIS_URL or "").strip()
+            if not redis_url:
+                raise ValueError("REDIS_URL is empty")
+
             import redis as redislib
             _redis_client = redislib.from_url(
-                settings.REDIS_URL,
+                redis_url,
                 decode_responses=True,
                 socket_connect_timeout=3,
                 socket_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30,
             )
             _redis_client.ping()
-            logger.info("✅ Redis connected at %s", settings.REDIS_URL)
+            logger.info("✅ Redis connected at %s", redis_url)
         except Exception as exc:
+            if settings.APP_ENV == "production":
+                logger.error("❌ Redis connection failed in production: %s", exc)
+                raise RuntimeError(
+                    f"Redis is required in production but could not connect to {settings.REDIS_URL}"
+                ) from exc
+
             logger.warning(
                 "⚠️  Redis unavailable (%s) — falling back to in-memory store. "
                 "Session state will NOT survive restarts.",
