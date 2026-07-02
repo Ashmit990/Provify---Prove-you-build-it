@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -24,13 +25,20 @@ async def lifespan(app: FastAPI):
     
     # setup langsmith
     try:
-        import os
         os.environ["LANGCHAIN_TRACING_V2"] = settings.LANGCHAIN_TRACING_V2
         os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
         os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
         logging.info("✅ LangSmith tracing enabled")
     except Exception as e:
         logging.error(f"❌ LangSmith failed: {e}")
+
+    # warm embeddings once during startup to reduce first-request latency
+    try:
+        from app.services.ingestion import get_embeddings
+        get_embeddings()
+        logging.info("✅ Embedding model warmed up")
+    except Exception as e:
+        logging.error(f"❌ Embedding warmup failed: {e}")
     
     yield
     
@@ -51,11 +59,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "https://provify-prove-you-build-it.vercel.app",
+        "https://*.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # ── ROUTES ────────────────────────────────────────────────
