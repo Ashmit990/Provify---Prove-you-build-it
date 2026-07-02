@@ -1,7 +1,7 @@
 import os
 import logging
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from app.core.database import supabase_admin
@@ -17,14 +17,14 @@ _embedding_model = None
 def get_embeddings():
     global _embedding_model
     if _embedding_model is None:
-        cache_dir = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+        cache_dir = os.environ.get("FASTEMBED_CACHE_DIR") or os.path.join(
+            os.path.expanduser("~"), ".cache", "fastembed"
+        )
         os.makedirs(cache_dir, exist_ok=True)
-        logger.info("Initialising local HuggingFace embeddings from %s...", cache_dir)
-        _embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": False},
-            cache_folder=cache_dir,
+        logger.info("Initialising FastEmbed embeddings from %s...", cache_dir)
+        _embedding_model = FastEmbedEmbeddings(
+            model_name="BAAI/bge-small-en-v1.5",
+            cache_dir=cache_dir,
         )
     return _embedding_model
 
