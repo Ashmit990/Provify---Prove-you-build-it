@@ -14,9 +14,6 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str
     SUPABASE_SERVICE_KEY: str
     
-    # Redis (optional — falls back to in-memory if unavailable)
-    REDIS_URL: str = "redis://localhost:6379"
-    
     # LangSmith
     LANGCHAIN_API_KEY: str
     LANGCHAIN_PROJECT: str = "provify"
