@@ -35,3 +35,4 @@ supabase-functions==2.31.0
 
 # Session store
 redis[hiredis]==8.0.1
+email-validator
