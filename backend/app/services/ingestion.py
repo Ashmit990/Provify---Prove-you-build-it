@@ -1,7 +1,7 @@
 import os
 import logging
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from app.core.database import supabase_admin
@@ -17,11 +17,14 @@ _embedding_model = None
 def get_embeddings():
     global _embedding_model
     if _embedding_model is None:
-        hf_token = os.environ.get("HF_TOKEN", "")
-        logger.info("Initialising HuggingFace Inference API embeddings...")
-        _embedding_model = HuggingFaceInferenceAPIEmbeddings(
-            api_key=hf_token,
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        cache_dir = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+        os.makedirs(cache_dir, exist_ok=True)
+        logger.info("Initialising local HuggingFace embeddings from %s...", cache_dir)
+        _embedding_model = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": False},
+            cache_folder=cache_dir,
         )
     return _embedding_model
 
