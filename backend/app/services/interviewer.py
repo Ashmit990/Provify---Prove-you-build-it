@@ -9,7 +9,7 @@ from app.services.ingestion import get_session_vectorstore
 
 logger = logging.getLogger(__name__)
 
-# ── STATE ─────────────────────────────────────────────────
+
 class InterviewState(TypedDict):
     session_id: str
     project_description: str
@@ -20,7 +20,7 @@ class InterviewState(TypedDict):
     total_score: int
     status: str
 
-# ── LLM ───────────────────────────────────────────────────
+
 def get_llm():
     return ChatGroq(
         api_key=settings.GROQ_API_KEY,
@@ -28,10 +28,10 @@ def get_llm():
         temperature=0.3
     )
 
-# ── NODE 1: Generate Question ──────────────────────────────
+
+# ── NODE 1: Generate ONE question then stop ────────────────
 def generate_question(state: InterviewState) -> InterviewState:
     session_id = state["session_id"]
-    asked_questions = [q["question"] for q in state["questions"]]
     used_sources = {q["source_file"] for q in state["questions"]}
     used_chunks = {q["code_reference"] for q in state["questions"]}
 
@@ -39,56 +39,52 @@ def generate_question(state: InterviewState) -> InterviewState:
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
 
     query = state["project_description"]
-    if asked_questions:
-        query = f"{query} {' '.join(asked_questions[-2:])}"
-
     docs = retriever.invoke(query)
 
+    # filter out empty/whitespace docs first
+    docs = [d for d in docs if d.page_content.strip()]
+
     chosen = next(
-        (d for d in docs if d.metadata.get("source", "unknown") not in used_sources),
-        None,
+        (d for d in docs if d.metadata.get("source") not in used_sources),
+        None
     )
     if chosen is None:
         chosen = next(
             (d for d in docs if d.page_content not in used_chunks),
-            None,
+            None
         )
     if chosen is None:
         chosen = docs[0] if docs else None
-        logger.warning(
-            "generate_question: no unused chunk found for session %s at question %d; reusing a chunk",
-            session_id,
-            len(state["questions"]) + 1,
-        )
+        logger.warning("No unused chunk found for session %s at question %d", session_id, len(state["questions"]) + 1)
 
-    code_chunk = chosen.page_content if chosen else ""
+    code_chunk = chosen.page_content.strip() if chosen else ""
     source_file = chosen.metadata.get("source", "unknown") if chosen else "unknown"
+
+    # Guard: if chunk is empty, skip LLM call entirely
+    if not code_chunk:
+        logger.error("Empty code chunk retrieved — skipping question generation")
+        return {**state, "status": "in_progress"}
 
     llm = get_llm()
     backtick = "```"
     prompt = (
-        f"You are a senior software engineer conducting a real technical interview at a top tech company.\n"
+        f"You are a senior software engineer conducting a real technical interview.\n"
         f"The candidate claims to have built this project themselves.\n\n"
         f"Here is actual code from their project:\n\n"
         f"File: {source_file}\n"
-        f"{backtick}\n"
-        f"{code_chunk}\n"
-        f"{backtick}\n\n"
+        f"{backtick}\n{code_chunk}\n{backtick}\n\n"
         f"Ask ONE deep, specific technical question about this exact code.\n\n"
         f"Good question types:\n"
         f"- Why did you choose this approach over [specific alternative]?\n"
         f"- What happens under the hood when this line executes?\n"
         f"- What's the failure mode here and how would you handle it?\n"
         f"- How does this scale if you had 10,000 concurrent users?\n"
-        f"- What's the time/space complexity of this and why does it matter here?\n"
-        f"- If this dependency disappeared tomorrow, how would you replace it?\n"
         f"- Walk me through exactly what happens when [specific input] hits this code.\n\n"
         f"Rules:\n"
-        f"- Reference the ACTUAL variable names, function names, or logic from the code\n"
-        f"- Do NOT ask generic questions like 'explain RAG' or 'what is an API'\n"
-        f"- The question must be unanswerable without having actually built this\n"
+        f"- Reference ACTUAL variable names, function names, or logic from the code\n"
+        f"- Do NOT ask generic questions — must be unanswereable without having built this\n"
         f"- Max 2 sentences\n\n"
-        f"Return ONLY the question. No preamble, no explanation."
+        f"Return ONLY the question. No preamble."
     )
 
     response = llm.invoke([HumanMessage(content=prompt)])
@@ -106,10 +102,12 @@ def generate_question(state: InterviewState) -> InterviewState:
         "status": "in_progress"
     }
 
-# ── NODE 2: Evaluate Answer ────────────────────────────────
+
+# ── NODE 2: Evaluate the latest answer ────────────────────
 def evaluate_answer(state: InterviewState) -> InterviewState:
     current_idx = state["current_question_index"]
 
+    # No answer to evaluate yet (first question on /start)
     if current_idx >= len(state["answers"]):
         return state
 
@@ -125,9 +123,7 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
         f"You are a senior engineer evaluating a technical interview answer.\n\n"
         f"Question asked: {current_question['question']}\n\n"
         f"Actual code from their project:\n"
-        f"{backtick}\n"
-        f"{current_question['code_reference']}\n"
-        f"{backtick}\n\n"
+        f"{backtick}\n{current_question['code_reference']}\n{backtick}\n\n"
         f"Candidate's answer: {user_answer}\n\n"
         f"Do three things:\n\n"
         f"1. Score from 0-10:\n"
@@ -136,13 +132,12 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
         f"   - 5-6: Partial — right direction but vague or incomplete\n"
         f"   - 3-4: Weak — mostly incorrect or just guessing\n"
         f"   - 0-2: Wrong or no answer\n\n"
-        f"2. Give honest feedback on their answer — what they got right, what they missed, what was vague.\n\n"
-        f"3. Give the IDEAL answer — what a strong senior engineer would say. "
-        f"Be specific, reference the actual code, explain the reasoning behind decisions.\n\n"
+        f"2. Give honest feedback — what they got right, what they missed.\n\n"
+        f"3. Give the IDEAL answer — what a strong senior engineer would say.\n\n"
         f"Respond in EXACTLY this format:\n"
         f"SCORE: [number]\n"
-        f"FEEDBACK: [honest assessment of their answer]\n"
-        f"IDEAL_ANSWER: [what a strong engineer would have said]"
+        f"FEEDBACK: [assessment]\n"
+        f"IDEAL_ANSWER: [ideal response]"
     )
 
     response = llm.invoke([HumanMessage(content=prompt)])
@@ -185,22 +180,24 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
         {**current_answer, "score": score, "feedback": feedback, "ideal_answer": ideal_answer}
     ] + state["answers"][current_idx + 1:]
 
+    is_last = (current_idx + 1) >= 10
+
     return {
         **state,
         "scores": updated_scores,
         "total_score": sum(updated_scores),
         "answers": updated_answers,
-        "current_question_index": current_idx + 1
+        "current_question_index": current_idx + 1,
+        "status": "completed" if is_last else "in_progress"
     }
 
 
-# ── ROUTER ────────────────────────────────────────────────
+# ── ROUTER: always stop after one generate+evaluate cycle ──
 def should_continue(state: InterviewState) -> str:
-    if len(state["questions"]) >= 10:
-        return "end"
     if state["status"] == "completed":
         return "end"
-    return "generate"
+    # Stop after generating one question — frontend drives the loop
+    return "end"
 
 
 # ── BUILD GRAPH ────────────────────────────────────────────
@@ -216,10 +213,7 @@ def build_interview_graph():
     graph.add_conditional_edges(
         "evaluate_answer",
         should_continue,
-        {
-            "generate": "generate_question",
-            "end": END
-        }
+        {"end": END}
     )
 
     return graph.compile()

@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 CHROMA_BASE_DIR = "/tmp/provify_chroma"
 
-# single instance reused across sessions — no model weights in memory
 _embedding_model = None
+
 
 def get_embeddings():
     global _embedding_model
@@ -28,7 +28,7 @@ def get_embeddings():
 
 
 def list_all_files(prefix: str) -> list[str]:
-    """Recursively list every file path under a storage prefix (handles nested folders)"""
+    """Recursively list every file path under a storage prefix"""
     all_paths = []
     entries = supabase_admin.storage.from_("provify-code").list(prefix)
     for entry in entries:
@@ -49,9 +49,13 @@ def fetch_session_files(session_id: str) -> dict[str, str]:
         raw = supabase_admin.storage.from_("provify-code").download(path)
         try:
             relative_name = path[len(session_id) + 1:]
-            contents[relative_name] = raw.decode("utf-8")
+            text = raw.decode("utf-8")
+            # ✅ skip empty or whitespace-only files
+            if text.strip():
+                contents[relative_name] = text
         except UnicodeDecodeError:
             continue
+    logger.info(f"Fetched {len(contents)} non-empty files for session {session_id}")
     return contents
 
 
@@ -66,10 +70,13 @@ def chunk_files(files: dict[str, str]) -> list[Document]:
     for filename, content in files.items():
         chunks = splitter.split_text(content)
         for i, chunk in enumerate(chunks):
-            documents.append(Document(
-                page_content=chunk,
-                metadata={"source": filename, "chunk_index": i}
-            ))
+            # ✅ skip empty or whitespace-only chunks
+            if chunk.strip():
+                documents.append(Document(
+                    page_content=chunk,
+                    metadata={"source": filename, "chunk_index": i}
+                ))
+    logger.info(f"Produced {len(documents)} non-empty chunks from {len(files)} files")
     return documents
 
 
@@ -77,13 +84,14 @@ def ingest_session(session_id: str) -> int:
     """
     Per-session RAG pipeline:
     fetch code -> chunk -> embed via HF API -> store in a fresh Chroma collection
-    Returns number of chunks ingested.
     """
     files = fetch_session_files(session_id)
     if not files:
         raise ValueError(f"No files found for session {session_id}")
 
     documents = chunk_files(files)
+    if not documents:
+        raise ValueError(f"No valid chunks produced for session {session_id}")
 
     persist_dir = f"{CHROMA_BASE_DIR}/{session_id}"
     os.makedirs(persist_dir, exist_ok=True)
