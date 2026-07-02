@@ -51,7 +51,7 @@ async def start_interview(req: StartInterviewRequest):
     # LangGraph is blocking — run in thread pool to keep the event loop responsive
     state = await loop.run_in_executor(None, interview_graph.invoke, initial_state)
 
-    # Persist to Redis (with in-memory fallback)
+    # Persist interview state in memory
     await loop.run_in_executor(None, save_session, req.session_id, dict(state))
 
     # Create the session row in Supabase
@@ -84,7 +84,7 @@ async def start_interview(req: StartInterviewRequest):
 async def submit_answer(req: AnswerRequest):
     loop = asyncio.get_event_loop()
 
-    # Load from Redis (or in-memory fallback)
+    # Load interview state from memory
     state = await loop.run_in_executor(None, load_session, req.session_id)
     if not state:
         raise HTTPException(
@@ -132,7 +132,7 @@ async def submit_answer(req: AnswerRequest):
         except Exception as exc:
             logger.error("Failed to update session: %s", exc)
 
-        # Clean up ChromaDB collection and Redis key
+        # Clean up ChromaDB collection and session state
         try:
             await loop.run_in_executor(None, delete_session_vectorstore, req.session_id)
         except Exception as exc:
