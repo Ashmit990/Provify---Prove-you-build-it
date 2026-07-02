@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  # ── Redis ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── FastAPI Backend ───────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      # Skip model-download stage in local dev — we rely on host cache
+      target: runtime
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app        # hot-reload source
+      - chroma_data:/data/chroma      # persistent ChromaDB
+    env_file:
+      - ./backend/.env                # GROQ, SUPABASE, LANGSMITH keys (never commit this)
+    environment:
+      REDIS_URL: redis://redis:6379
+      CHROMA_BASE_DIR: /data/chroma
+      APP_ENV: development
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      uvicorn app.main:app
+        --host 0.0.0.0
+        --port 8000
+        --reload
+        --reload-dir /app/app
+
+  # ── Next.js Frontend ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./provify-frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000"
+        NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL}"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  redis_data:
+  chroma_data:

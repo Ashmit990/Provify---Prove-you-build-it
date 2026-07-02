@@ -1,0 +1,144 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+/* ── Design tokens ───────────────────────────────────────── */
+:root {
+  /* Surfaces */
+  --bg:        #F8F9FA;
+  --surface:   #FFFFFF;
+  --surface-2: #F3F4F6;
+  --surface-3: #EFF0F2;
+
+  /* Borders */
+  --border:    #E5E7EB;
+  --border-2:  #D1D5DB;
+
+  /* Text */
+  --text:      #111827;
+  --text-2:    #374151;
+  --text-3:    #6B7280;
+  --text-4:    #9CA3AF;
+
+  /* Sidebar */
+  --sidebar-bg:     #111318;
+  --sidebar-text:   #F9FAFB;
+  --sidebar-muted:  #9CA3AF;
+  --sidebar-hover:  rgba(255,255,255,0.07);
+  --sidebar-active: rgba(59,130,246,0.15);
+
+  /* Accent — Blue */
+  --blue:      #3B82F6;
+  --blue-dim:  #EFF6FF;
+  --blue-mid:  #BFDBFE;
+  --blue-text: #1D4ED8;
+
+  /* Accent — Green */
+  --green:     #22C55E;
+  --green-dim: #F0FDF4;
+  --green-mid: #BBF7D0;
+  --green-text:#15803D;
+
+  /* Accent — Amber */
+  --amber:     #F59E0B;
+  --amber-dim: #FFFBEB;
+  --amber-mid: #FDE68A;
+  --amber-text:#B45309;
+
+  /* Accent — Red */
+  --red:       #EF4444;
+  --red-dim:   #FEF2F2;
+  --red-mid:   #FECACA;
+  --red-text:  #B91C1C;
+
+  --radius: 0.75rem;
+}
+
+/* ── Tailwind token mapping ──────────────────────────────── */
+@theme inline {
+  /* Surfaces */
+  --color-bg:        var(--bg);
+  --color-surface:   var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  /* Borders */
+  --color-border:    var(--border);
+  --color-border-2:  var(--border-2);
+
+  /* Text */
+  --color-text:      var(--text);
+  --color-text-2:    var(--text-2);
+  --color-text-3:    var(--text-3);
+  --color-text-4:    var(--text-4);
+
+  /* Sidebar */
+  --color-sidebar-bg:     var(--sidebar-bg);
+  --color-sidebar-text:   var(--sidebar-text);
+  --color-sidebar-muted:  var(--sidebar-muted);
+
+  /* Accents */
+  --color-blue:       var(--blue);
+  --color-blue-dim:   var(--blue-dim);
+  --color-blue-mid:   var(--blue-mid);
+  --color-blue-text:  var(--blue-text);
+  --color-green:      var(--green);
+  --color-green-dim:  var(--green-dim);
+  --color-green-mid:  var(--green-mid);
+  --color-green-text: var(--green-text);
+  --color-amber:      var(--amber);
+  --color-amber-dim:  var(--amber-dim);
+  --color-amber-mid:  var(--amber-mid);
+  --color-amber-text: var(--amber-text);
+  --color-red:        var(--red);
+  --color-red-dim:    var(--red-dim);
+  --color-red-mid:    var(--red-mid);
+  --color-red-text:   var(--red-text);
+
+  /* Typography */
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jbmono);
+  --radius-xl: var(--radius);
+}
+
+/* ── Base styles ─────────────────────────────────────────── */
+html, body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--blue-mid);
+  color: var(--blue-text);
+}
+
+/* ── Typography utilities ────────────────────────────────── */
+.font-mono-tag {
+  font-family: var(--font-jbmono), ui-monospace, monospace;
+}
+
+/* ── Focus ring ──────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
+
+/* ── Reduced motion ──────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
