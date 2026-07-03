@@ -1,4 +1,7 @@
 import httpx
+from supabase import create_client, Client
+from app.core.config import settings
+import logging
 
 # Monkey-patch httpx to disable HTTP/2 (fixes "pop from an empty deque" bug in Python 3.14)
 _original_client_init = httpx.Client.__init__
@@ -13,9 +16,7 @@ def _patched_async_client_init(self, *args, **kwargs):
     _original_async_client_init(self, *args, **kwargs)
 httpx.AsyncClient.__init__ = _patched_async_client_init
 
-from supabase import create_client, Client
-from app.core.config import settings
-import logging
+
 
 logger = logging.getLogger(__name__)
 
