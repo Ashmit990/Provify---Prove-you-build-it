@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {
     '.py', '.js', '.ts', '.tsx', '.jsx',
     '.html', '.css', '.md', '.txt', '.json',
-    '.yaml', '.yml', '.toml', '.env.example'
+    '.yaml', '.yml', '.toml', '.env.example',
+    '.php', '.sql', '.java', '.c', '.cpp', '.h',
+    '.rb', '.go', '.rs', '.swift', '.kt'
 }
 
 SKIP_FOLDERS = {
