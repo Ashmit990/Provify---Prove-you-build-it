@@ -33,6 +33,14 @@ def get_embeddings():
         _embedding_model = FastEmbedEmbeddings(
             model_name="BAAI/bge-small-en-v1.5",
             cache_dir=cache_dir,
+            # Chunks are capped at 1000 chars (~200-250 tokens for code) —
+            # the default max_length=512 makes ONNX allocate buffers for
+            # sequences twice as long as we'll ever actually send it.
+            max_length=256,
+            # Fewer threads = fewer parallel ONNX buffers held at once.
+            # We're on a 0.1 CPU instance anyway, so there's no real
+            # parallelism to gain from more threads.
+            threads=1,
         )
     return _embedding_model
 
@@ -55,12 +63,10 @@ class SessionVectorStore:
     similarity_search(), similarity_search_with_score(), and as_retriever().
     """
 
-    # Embedding a few hundred chunks in a single embed_documents() call holds
-    # every input text, every output vector, and FastEmbed's internal ONNX
-    # batch buffers in memory all at once. On a 512MB instance that spike is
-    # enough to OOM even after removing Chroma. Batching keeps only one small
-    # slice of chunks (and its buffers) alive at a time.
-    EMBED_BATCH_SIZE = 16
+    # Even a single batch of 16 chunks spiked memory past 512MB in testing —
+    # the cost is dominated by ONNX's per-call arena allocation, not chunk
+    # count. Going smaller reduces how much of that arena is exercised per call.
+    EMBED_BATCH_SIZE = 4
 
     def __init__(self, documents: list[Document], embeddings):
         _log_memory("vectorstore init: start")
