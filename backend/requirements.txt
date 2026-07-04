@@ -21,7 +21,7 @@ langsmith==0.2.10
 # Embeddings + Vector store
 fastembed==0.4.2
 huggingface_hub==0.27.1
-chromadb==0.6.3
+
 
 # Database / Auth
 supabase==2.11.0
