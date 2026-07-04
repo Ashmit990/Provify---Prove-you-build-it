@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 import resource
 import httpx
@@ -36,10 +37,13 @@ class JinaEmbeddings:
     with a network round-trip instead of RAM.
     """
 
-    # Chunking requests, not for memory (there's no local model anymore),
-    # but to keep each HTTP payload/response reasonably sized and avoid
-    # hitting Jina's per-request limits on a single call for large projects.
-    REQUEST_BATCH_SIZE = 64
+    # Jina's free tier caps both requests/minute and tokens/minute. A large
+    # project's chunks add up to well over the per-minute token budget if
+    # fired off in a handful of big, back-to-back requests — smaller batches
+    # plus a short pause between them keeps us under that ceiling.
+    REQUEST_BATCH_SIZE = 20
+    PAUSE_BETWEEN_BATCHES = 1.0  # seconds
+    MAX_RETRIES = 5
 
     def __init__(self, api_key: str):
         if not api_key:
@@ -52,22 +56,44 @@ class JinaEmbeddings:
             timeout=30.0,
         )
 
+    def _post_with_retry(self, payload: dict) -> dict:
+        for attempt in range(self.MAX_RETRIES):
+            response = self._client.post(JINA_EMBEDDINGS_URL, json=payload)
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response.json()
+
+            # Respect Retry-After if Jina sends one, otherwise back off
+            # exponentially: 2s, 4s, 8s, 16s, 32s.
+            retry_after = response.headers.get("Retry-After")
+            wait = float(retry_after) if retry_after else (2 ** (attempt + 1))
+            logger.warning(
+                "Jina API rate-limited (429), retrying in %.1fs (attempt %d/%d)",
+                wait, attempt + 1, self.MAX_RETRIES,
+            )
+            time.sleep(wait)
+
+        # Final attempt — let it raise naturally if still failing
+        response = self._client.post(JINA_EMBEDDINGS_URL, json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def _embed(self, texts: list[str], task: str) -> list[list[float]]:
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), self.REQUEST_BATCH_SIZE):
+        num_batches = (len(texts) + self.REQUEST_BATCH_SIZE - 1) // self.REQUEST_BATCH_SIZE
+        for i, start in enumerate(range(0, len(texts), self.REQUEST_BATCH_SIZE)):
             batch = texts[start:start + self.REQUEST_BATCH_SIZE]
-            response = self._client.post(
-                JINA_EMBEDDINGS_URL,
-                json={
-                    "model": JINA_MODEL,
-                    "task": task,
-                    "dimensions": JINA_DIMENSIONS,
-                    "input": batch,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()["data"]
+            data = self._post_with_retry({
+                "model": JINA_MODEL,
+                "task": task,
+                "dimensions": JINA_DIMENSIONS,
+                "input": batch,
+            })["data"]
             vectors.extend(item["embedding"] for item in data)
+            # Small pause between batches (skip after the last one) so we
+            # stay under Jina's tokens-per-minute ceiling on large projects.
+            if i < num_batches - 1:
+                time.sleep(self.PAUSE_BETWEEN_BATCHES)
         return vectors
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
