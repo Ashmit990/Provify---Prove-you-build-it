@@ -45,7 +45,6 @@ class JinaEmbeddings:
         if not api_key:
             raise ValueError("JINA_API_KEY is not set")
         self._client = httpx.Client(
-            base_url=JINA_EMBEDDINGS_URL,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
@@ -58,7 +57,7 @@ class JinaEmbeddings:
         for start in range(0, len(texts), self.REQUEST_BATCH_SIZE):
             batch = texts[start:start + self.REQUEST_BATCH_SIZE]
             response = self._client.post(
-                "",
+                JINA_EMBEDDINGS_URL,
                 json={
                     "model": JINA_MODEL,
                     "task": task,
