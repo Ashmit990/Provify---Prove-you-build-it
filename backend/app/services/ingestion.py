@@ -1,11 +1,12 @@
 import os
 import logging
 import resource
+import httpx
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.documents import Document
 from app.core.database import supabase_admin
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +15,68 @@ def _log_memory(label: str) -> None:
     """
     Log this process's peak resident memory so far (RSS high-water mark).
     ru_maxrss is in KB on Linux (Render's containers) — convert to MB.
-    Temporary diagnostic to pinpoint exactly which step causes the OOM.
     """
     peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     logger.info(f"📊 MEMORY [{label}]: peak RSS so far = {peak_mb:.1f} MB")
+
+
+JINA_EMBEDDINGS_URL = "https://api.jina.ai/v1/embeddings"
+JINA_MODEL = "jina-embeddings-v3"
+JINA_DIMENSIONS = 512  # smaller vectors = less memory in our own matrix too
+
+
+class JinaEmbeddings:
+    """
+    Calls Jina AI's hosted embeddings API instead of running a model
+    in-process. Removes ONNX Runtime, its arena allocation, and the whole
+    local-model memory footprint from our process entirely — replaced
+    with a plain HTTP call. This is the deliberate trade we made after
+    confirming (via direct memory instrumentation) that local ONNX
+    inference doesn't fit comfortably in a 512MB container: we now pay
+    with a network round-trip instead of RAM.
+    """
+
+    # Chunking requests, not for memory (there's no local model anymore),
+    # but to keep each HTTP payload/response reasonably sized and avoid
+    # hitting Jina's per-request limits on a single call for large projects.
+    REQUEST_BATCH_SIZE = 64
+
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("JINA_API_KEY is not set")
+        self._client = httpx.Client(
+            base_url=JINA_EMBEDDINGS_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            timeout=30.0,
+        )
+
+    def _embed(self, texts: list[str], task: str) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.REQUEST_BATCH_SIZE):
+            batch = texts[start:start + self.REQUEST_BATCH_SIZE]
+            response = self._client.post(
+                "",
+                json={
+                    "model": JINA_MODEL,
+                    "task": task,
+                    "dimensions": JINA_DIMENSIONS,
+                    "input": batch,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()["data"]
+            vectors.extend(item["embedding"] for item in data)
+        return vectors
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embed(texts, task="retrieval.passage")
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed([text], task="retrieval.query")[0]
+
 
 _embedding_model = None
 
@@ -25,23 +84,8 @@ _embedding_model = None
 def get_embeddings():
     global _embedding_model
     if _embedding_model is None:
-        cache_dir = os.environ.get("FASTEMBED_CACHE_DIR") or os.path.join(
-            os.path.expanduser("~"), ".cache", "fastembed"
-        )
-        os.makedirs(cache_dir, exist_ok=True)
-        logger.info("Initialising FastEmbed embeddings from %s...", cache_dir)
-        _embedding_model = FastEmbedEmbeddings(
-            model_name="BAAI/bge-small-en-v1.5",
-            cache_dir=cache_dir,
-            # Chunks are capped at 1000 chars (~200-250 tokens for code) —
-            # the default max_length=512 makes ONNX allocate buffers for
-            # sequences twice as long as we'll ever actually send it.
-            max_length=256,
-            # Fewer threads = fewer parallel ONNX buffers held at once.
-            # We're on a 0.1 CPU instance anyway, so there's no real
-            # parallelism to gain from more threads.
-            threads=1,
-        )
+        logger.info("Initialising Jina embeddings client (%s)...", JINA_MODEL)
+        _embedding_model = JinaEmbeddings(api_key=settings.JINA_API_KEY)
     return _embedding_model
 
 
@@ -56,17 +100,17 @@ class SessionVectorStore:
     concurrent collections. We never need any of that: no persistence, no
     concurrency across sessions, no scale beyond a few hundred vectors.
     A plain list + NumPy cosine similarity does the identical job with a
-    fraction of the fixed memory overhead, which is what was pushing
-    Render's 512MB free-tier instance into OOM restarts.
+    fraction of the fixed memory overhead.
+
+    Embeddings themselves come from Jina's hosted API (JinaEmbeddings)
+    rather than a locally-loaded ONNX model — direct memory instrumentation
+    showed local ONNX inference has a large, growing per-call memory cost
+    that doesn't fit a 512MB container even in small batches. Offloading
+    inference to an API call removes that cost entirely from this process.
 
     Exposes the same shape LangChain retrieval code commonly expects:
     similarity_search(), similarity_search_with_score(), and as_retriever().
     """
-
-    # Even a single batch of 16 chunks spiked memory past 512MB in testing —
-    # the cost is dominated by ONNX's per-call arena allocation, not chunk
-    # count. Going smaller reduces how much of that arena is exercised per call.
-    EMBED_BATCH_SIZE = 4
 
     def __init__(self, documents: list[Document], embeddings):
         _log_memory("vectorstore init: start")
@@ -74,12 +118,11 @@ class SessionVectorStore:
         self._documents: list[Document] = documents
         texts = [doc.page_content for doc in documents]
 
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), self.EMBED_BATCH_SIZE):
-            batch = texts[start:start + self.EMBED_BATCH_SIZE]
-            vectors.extend(embeddings.embed_documents(batch))
-            end = min(start + self.EMBED_BATCH_SIZE, len(texts))
-            _log_memory(f"after embedding batch {start}-{end} of {len(texts)}")
+        # No local model, no ONNX arena — embedding now happens via HTTP,
+        # so JinaEmbeddings.embed_documents() handles its own request
+        # batching internally. One call here is enough.
+        vectors = embeddings.embed_documents(texts)
+        _log_memory("after embed_documents (Jina API)")
 
         # Normalize once at ingest time so similarity search is a plain dot product
         self._matrix = self._normalize(np.array(vectors, dtype=np.float32))

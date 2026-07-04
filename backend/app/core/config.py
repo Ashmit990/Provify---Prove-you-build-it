@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # App
     APP_ENV: str = "development"
     SECRET_KEY: str
+    JINA_API_KEY: str
     
     # Groq
     GROQ_API_KEY: str
