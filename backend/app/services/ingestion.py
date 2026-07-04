@@ -44,11 +44,27 @@ class SessionVectorStore:
     similarity_search(), similarity_search_with_score(), and as_retriever().
     """
 
+    # Embedding a few hundred chunks in a single embed_documents() call holds
+    # every input text, every output vector, and FastEmbed's internal ONNX
+    # batch buffers in memory all at once. On a 512MB instance that spike is
+    # enough to OOM even after removing Chroma. Batching keeps only one small
+    # slice of chunks (and its buffers) alive at a time.
+    EMBED_BATCH_SIZE = 16
+
     def __init__(self, documents: list[Document], embeddings):
         self._embeddings = embeddings
         self._documents: list[Document] = documents
         texts = [doc.page_content for doc in documents]
-        vectors = embeddings.embed_documents(texts)
+
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.EMBED_BATCH_SIZE):
+            batch = texts[start:start + self.EMBED_BATCH_SIZE]
+            vectors.extend(embeddings.embed_documents(batch))
+            logger.debug(
+                "Embedded chunks %d-%d of %d",
+                start, min(start + self.EMBED_BATCH_SIZE, len(texts)), len(texts),
+            )
+
         # Normalize once at ingest time so similarity search is a plain dot product
         self._matrix = self._normalize(np.array(vectors, dtype=np.float32))
 
