@@ -1,5 +1,6 @@
 import os
 import logging
+import resource
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import FastEmbedEmbeddings
@@ -7,6 +8,16 @@ from langchain_core.documents import Document
 from app.core.database import supabase_admin
 
 logger = logging.getLogger(__name__)
+
+
+def _log_memory(label: str) -> None:
+    """
+    Log this process's peak resident memory so far (RSS high-water mark).
+    ru_maxrss is in KB on Linux (Render's containers) — convert to MB.
+    Temporary diagnostic to pinpoint exactly which step causes the OOM.
+    """
+    peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    logger.info(f"📊 MEMORY [{label}]: peak RSS so far = {peak_mb:.1f} MB")
 
 _embedding_model = None
 
@@ -52,6 +63,7 @@ class SessionVectorStore:
     EMBED_BATCH_SIZE = 16
 
     def __init__(self, documents: list[Document], embeddings):
+        _log_memory("vectorstore init: start")
         self._embeddings = embeddings
         self._documents: list[Document] = documents
         texts = [doc.page_content for doc in documents]
@@ -60,13 +72,12 @@ class SessionVectorStore:
         for start in range(0, len(texts), self.EMBED_BATCH_SIZE):
             batch = texts[start:start + self.EMBED_BATCH_SIZE]
             vectors.extend(embeddings.embed_documents(batch))
-            logger.debug(
-                "Embedded chunks %d-%d of %d",
-                start, min(start + self.EMBED_BATCH_SIZE, len(texts)), len(texts),
-            )
+            end = min(start + self.EMBED_BATCH_SIZE, len(texts))
+            _log_memory(f"after embedding batch {start}-{end} of {len(texts)}")
 
         # Normalize once at ingest time so similarity search is a plain dot product
         self._matrix = self._normalize(np.array(vectors, dtype=np.float32))
+        _log_memory("vectorstore init: done")
 
     @staticmethod
     def _normalize(matrix: np.ndarray) -> np.ndarray:
@@ -164,13 +175,16 @@ def ingest_session(session_id: str) -> int:
     Build an IN-MEMORY vector store for this session.
     No Chroma, no persistence — survives only for the life of this process.
     """
+    _log_memory("ingest_session: start")
     files = fetch_session_files(session_id)
     if not files:
         raise ValueError(f"No files found for session {session_id}")
+    _log_memory("after fetch_session_files")
 
     documents = chunk_files(files)
     if not documents:
         raise ValueError(f"No valid chunks produced for session {session_id}")
+    _log_memory("after chunk_files")
 
     vectorstore = SessionVectorStore(documents=documents, embeddings=get_embeddings())
 
