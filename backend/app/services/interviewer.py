@@ -83,7 +83,12 @@ def generate_question(state: InterviewState) -> InterviewState:
         f"Rules:\n"
         f"- Reference ACTUAL variable names, function names, or logic from the code\n"
         f"- Do NOT ask generic questions — must be unanswereable without having built this\n"
-        f"- Max 2 sentences\n\n"
+        f"- Max 2 sentences\n"
+        f"- If the question is testing a specific named technical concept (e.g. "
+        f"re-rendering, race condition, memory leak, N+1 query, deadlock, "
+        f"closure, dangling reference), explicitly name that concept in the "
+        f"question itself — don't just describe the symptom vaguely without "
+        f"naming what it's actually called.\n\n"
         f"Return ONLY the question. No preamble."
     )
 
@@ -117,31 +122,27 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
     user_answer = current_answer.get("answer", "")
     peeked = current_answer.get("peeked", False)
 
+    question_text = current_question["question"]
+    source_file = current_question["source_file"]
+    code_chunk = current_question["code_reference"]
+
     llm = get_llm()
     backtick = "```"
     prompt = (
-        f"You are a senior software engineer conducting a real technical interview.\n"
-        f"The candidate claims to have built this project themselves.\n\n"
-        f"Here is actual code from their project:\n\n"
+        f"You are a senior software engineer grading a candidate's answer in a "
+        f"real technical interview.\n\n"
+        f"Here is the actual code the question was about:\n\n"
         f"File: {source_file}\n"
         f"{backtick}\n{code_chunk}\n{backtick}\n\n"
-        f"Ask ONE deep, specific technical question about this exact code.\n\n"
-        f"Good question types:\n"
-        f"- Why did you choose this approach over [specific alternative]?\n"
-        f"- What happens under the hood when this line executes?\n"
-        f"- What's the failure mode here and how would you handle it?\n"
-        f"- How does this scale if you had 10,000 concurrent users?\n"
-        f"- Walk me through exactly what happens when [specific input] hits this code.\n\n"
-        f"Rules:\n"
-        f"- Reference ACTUAL variable names, function names, or logic from the code\n"
-        f"- Do NOT ask generic questions — must be unanswereable without having built this\n"
-        f"- Max 2 sentences\n"
-        f"- Use simple, plain, everyday wording. Short sentences. One idea per sentence.\n"
-        f"- Do NOT stack multiple sub-questions or clauses into a single sentence using "
-        f"'and how does...' or 'potentially causing...' — ask about ONE thing directly.\n"
-        f"- Keep the technical depth and specificity exactly as hard as before — only "
-        f"simplify the SENTENCE STRUCTURE and WORDING, not the difficulty of what's being asked.\n\n"
-        f"Return ONLY the question. No preamble."
+        f"Question asked: {question_text}\n\n"
+        f"Candidate's answer:\n{backtick}\n{user_answer}\n{backtick}\n\n"
+        f"Grade this answer against the actual code above. Be strict but fair — "
+        f"reward correct understanding of the real logic, penalize vague or "
+        f"generic answers that don't engage with the specific code shown.\n\n"
+        f"Return your response in EXACTLY this format, nothing else:\n"
+        f"SCORE: <a number from 0 to 10>\n"
+        f"FEEDBACK: <2-3 sentences on what was right or wrong about their answer>\n"
+        f"IDEAL_ANSWER: <what a strong answer would have said, referencing the actual code>"
     )
 
     response = llm.invoke([HumanMessage(content=prompt)])
