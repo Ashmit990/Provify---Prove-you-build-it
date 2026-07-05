@@ -22,10 +22,26 @@ class InterviewState(TypedDict):
 
 
 def get_llm():
+    """Fast, small model — used for question generation, where speed matters
+    more than deep reasoning."""
     return ChatGroq(
         api_key=settings.GROQ_API_KEY,
         model="llama-3.1-8b-instant",
         temperature=0.3
+    )
+
+
+def get_grading_llm():
+    """Bigger, more capable model — used specifically for evaluating answers.
+    Grading requires real reasoning (was this explanation actually correct
+    for this specific code?), and the small 8B model was confidently wrong
+    on nuanced questions (e.g. recommending useCallback for a plain boolean
+    that isn't a function at all). A larger model trades a bit of speed for
+    meaningfully more reliable grading."""
+    return ChatGroq(
+        api_key=settings.GROQ_API_KEY,
+        model="openai/gpt-oss-120b",
+        temperature=0.2
     )
 
 
@@ -88,7 +104,12 @@ def generate_question(state: InterviewState) -> InterviewState:
         f"re-rendering, race condition, memory leak, N+1 query, deadlock, "
         f"closure, dangling reference), explicitly name that concept in the "
         f"question itself — don't just describe the symptom vaguely without "
-        f"naming what it's actually called.\n\n"
+        f"naming what it's actually called.\n"
+        f"- Ask exactly ONE question mark's worth of question. Write the first "
+        f"sentence, then STOP — do not add a second clause asking something "
+        f"else, no matter how it's phrased ('and how would...', 'and what "
+        f"about...', 'potentially causing...', etc). If you have two things "
+        f"worth asking, pick the single most important one and discard the rest.\n\n"
         f"Return ONLY the question. No preamble."
     )
 
@@ -126,7 +147,7 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
     source_file = current_question["source_file"]
     code_chunk = current_question["code_reference"]
 
-    llm = get_llm()
+    llm = get_grading_llm()
     backtick = "```"
     prompt = (
         f"You are a senior software engineer grading a candidate's answer in a "
